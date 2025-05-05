@@ -31,6 +31,10 @@ wihs = read_csv("data/lau.csv") |>
          idu=BASEIDU)
 
 
+# Right censored within 10 years:
+wihs |> mutate(admin = t >= 10) |> group_by(eventtype, admin) |> summarise(n=n(), percent = n/1164)
+
+# Assess Subsets (not included in paper)
 set.seed(17)
 wihs_subset = bind_rows(
   wihs |> filter(aa_indicator == 1),
@@ -41,22 +45,12 @@ wihs_subset = bind_rows(
 
 # 2. Data Cleaning - CDC dataset ----
 
-cdc_2021 = read_csv("data/hiv_diagnoses_2021_2023.csv") |>
-  filter(Year == 2021) |>
-  mutate(
-    idu = ifelse(`Transmission Category` == "Injection drug use", 1, 0),
-    aa_indicator = ifelse(`Race/Ethnicity` == "Black/African American", 1, 0)
-  ) |>
+cdc_2008 = read_csv("data/cdc_2008.csv") |>
   rename(
-    race_ethnicity = `Race/Ethnicity`,
-    age = `Age Group`) |>
-  select(-c(Indicator, Year)) |>
-  group_by(age, idu, aa_indicator) |>
-  summarise(
-    cases = sum(Cases)
-  )
+    age = `AgeGroup`) |>
+  dplyr::select(age, idu, aa_indicator, cases)
 
-cdc_sample_n = function(n=500, seed=17, dataset=cdc_2021) {
+cdc_sample_n = function(n=500, seed=17, dataset=cdc_2008) {
   set.seed(seed)
 
   cdc = dataset |>
@@ -71,20 +65,20 @@ cdc_sample_n = function(n=500, seed=17, dataset=cdc_2021) {
   return(cdc)
 }
 
-cdc_sample_200 = cdc_sample_n(n=200)
-cdc_sample_500 = cdc_sample_n(n=500)
-cdc_sample_1000 = cdc_sample_n(n=1000)
-cdc_sample_5000 = cdc_sample_n(n=5000)
+cdc_sample_200 = cdc_sample_n(n=200, seed=18)
+cdc_sample_500 = cdc_sample_n(n=500, seed=17)
+cdc_sample_1000 = cdc_sample_n(n=1000, seed=17)
+cdc_sample_5000 = cdc_sample_n(n=5000, seed=17)
 
 # 3. Table 1 Generation ----
 table1_data = bind_rows(
-  target = cdc_2021 |> uncount(cases),
-  study = wihs |> select(age, aa_indicator, idu),
+  target = cdc_2008 |> uncount(cases),
+  study = wihs |> dplyr::select(age, aa_indicator, idu),
   .id = "pop"
 )
 
 table1(~factor(age) + factor(aa_indicator) + factor(idu) | pop, data = table1_data)
-
+table1(~factor(age) + factor(aa_indicator) + factor(idu), data=cdc_sample_200 |> uncount(cases))
 
 # 4. Both IOSW model generation ----
 generate_iosw_model = function(target_data, study_data, iosw_formula) {
@@ -116,11 +110,11 @@ generate_iosw_model = function(target_data, study_data, iosw_formula) {
   return(lau_data)
 }
 
-iosw_w = generate_iosw_model(cdc_2021, wihs, s ~ age * aa_indicator)
-iosw_aw = generate_iosw_model(cdc_2021, wihs, s ~ age * aa_indicator * idu)
+iosw_w = generate_iosw_model(cdc_2008, wihs, s ~ age * aa_indicator)
+iosw_aw = generate_iosw_model(cdc_2008, wihs, s ~ age * aa_indicator * idu)
 
-iosw_w.subset = generate_iosw_model(cdc_2021, wihs_subset, s ~ age * aa_indicator)
-iosw_aw.subset = generate_iosw_model(cdc_2021, wihs_subset, s ~ age * aa_indicator * idu)
+iosw_w.subset = generate_iosw_model(cdc_2008, wihs_subset, s ~ age * aa_indicator)
+iosw_aw.subset = generate_iosw_model(cdc_2008, wihs_subset, s ~ age * aa_indicator * idu)
 
 # Subsets
 {
@@ -222,7 +216,7 @@ bind_rows(
 
 # 7. Nonparametric Bootstrap ----
 bootstrap_step = function(iteration,
-                          target_pop = cdc_2021,
+                          target_pop = cdc_2008,
                           study_pop = wihs) {
 
   target_pop_size = sum(target_pop$cases)
@@ -263,19 +257,20 @@ bootstrap_step = function(iteration,
 
 bootstrap_step(1) |> view()
 
-bootstrap_runner = function(B=1000, bs_step, ...){
+bootstrap_runner = function(B=2000, bs_step, ...){
   sapply(1:B, function(x) bs_step(x, ...))
 }
 
 
 
-bootstrap = bootstrap_runner(B=1000, bootstrap_step, target_pop=cdc_2021, study_pop=wihs)
-bootstrap.subset = bootstrap_runner(B=1000, bootstrap_step, target_pop=cdc_2021, study_pop=wihs_subset)
+bootstrap = bootstrap_runner(B=2000, bootstrap_step, target_pop=cdc_2008, study_pop=wihs)
+bootstrap.naive = bootstrap_runner(B=2000, bootstrap_step, target_pop=wihs, study_pop=wihs)
+bootstrap.subset = bootstrap_runner(B=2000, bootstrap_step, target_pop=cdc_2008, study_pop=wihs_subset)
 
-bootstrap.200 = bootstrap_runner(B=1000, bootstrap_step, target_pop=cdc_sample_200, study_pop=wihs)
-bootstrap.500 = bootstrap_runner(B=1000, bootstrap_step, target_pop=cdc_sample_500, study_pop=wihs)
-bootstrap.1000 = bootstrap_runner(B=1000, bootstrap_step, target_pop=cdc_sample_1000, study_pop=wihs)
-bootstrap.5000 = bootstrap_runner(B=1000, bootstrap_step, target_pop=cdc_sample_5000, study_pop=wihs)
+bootstrap.200 = bootstrap_runner(B=2000, bootstrap_step, target_pop=cdc_sample_200, study_pop=wihs)
+bootstrap.500 = bootstrap_runner(B=2000, bootstrap_step, target_pop=cdc_sample_500, study_pop=wihs)
+bootstrap.1000 = bootstrap_runner(B=2000, bootstrap_step, target_pop=cdc_sample_1000, study_pop=wihs)
+bootstrap.5000 = bootstrap_runner(B=2000, bootstrap_step, target_pop=cdc_sample_5000, study_pop=wihs)
 
 
 bs.se = sd(bootstrap["true.paf", ] |> unlist())
@@ -295,93 +290,108 @@ quantile_cis = function(bootstraps, var="true.paf"){
   return(bootstraps[var, ] |> unlist() |> quantile(c(0.025, 0.975), na.rm=T))
 }
 
+
+
 # 8. M-Estimation - root finding ----
-paf_mestimation = function(theta,
-                           target_pop = cdc_2021,
-                           study_pop = wihs,
-                           solve = T){
 
-  target = target_pop |>
-    uncount(cases)
-
-  stacked_data = bind_rows(
-    target,
-    study_pop,
+make_stacked_data = function(target, study) {
+  bind_rows(
+    target |> uncount(cases),
+    study,
     .id="pop"
-  ) |>
-    replace_na()
-
-  # IOSW calculation
-  X.pop = stacked_data |>
-    ungroup() |>
-    transmute(
-      population = ifelse(pop == "1", 1, 0)
-    )|>
-    as.matrix()
-
-  X.iosw.w = stacked_data |>
-    model.matrix(object = ~age * aa_indicator)
-
-  X.iosw.aw = stacked_data |>
-    model.matrix(object = ~age * aa_indicator * idu)
-
-  X.iosw.w.study = X.iosw.w |>
-    tail(n = nrow(study_pop))
-
-  X.iosw.aw.study = X.iosw.aw |>
-    tail(n = nrow(study_pop))
-
-  # IPTW calculation
-  # Note; because target pop has NA for values, not included in model matrix.
-  X.exposure = model.matrix(~idu - 1, data=study_pop)
-  X.iptw = stacked_data |>
-    model.matrix(object = ~aa_indicator + cd4knots + ageknots)
-
-  # Y0, Y, PAF calculation
-  X.outcome = model.matrix(~d10 - 1, data=study_pop)
-
-  # Estimating Equation construction
-  ee_iptw = rbind(matrix(0, nrow=nrow(target), ncol=10),
-                  X.iptw * (((1 - X.exposure) - plogis(X.iptw %*% theta[1:10])) %*% matrix(1, ncol=10))
-                  )
-
-
-  ee_iptw_numerator = rbind(matrix(0, nrow=nrow(target), ncol=1),
-                            (1 - X.exposure) - theta[11])
-
-  ee_iosw_w = X.iosw.w * ((X.pop - plogis(X.iosw.w %*% theta[12:21])) %*% matrix(1, ncol=10))
-
-  ee_iosw_aw = X.iosw.aw * ((X.pop - plogis(X.iosw.aw %*% theta[22:41])) %*% matrix(1, ncol=20))
-
-  weight = replace_na(
-    (((1 - X.exposure) *  theta[11]) / (plogis(X.iptw %*% theta[1:10]))) * # IPTW
-      exp(X.iosw.w.study %*% theta[12:21]),
-    0
+  ) |> mutate(
+    population = ifelse(pop == "1", 1, 0)
   )
+}
 
-  ee_y0 = rbind(matrix(0, nrow=nrow(target), ncol=1),
-                (X.outcome - theta[42]) * weight)
-
-  ee_y = rbind(matrix(0, nrow=nrow(target), ncol=1),
-               (X.outcome - theta[43]) * exp(X.iosw.aw.study %*% theta[22:41]))
+stacked_data = make_stacked_data(cdc_2008, wihs)
 
 
-  ee_paf = matrix((theta[42] - theta[43] * (1 - theta[44])), nrow = nrow(stacked_data))
+paf_mestimation = function(stacked_data=stacked_data,
+                           solve = T){
+  function(theta){
+    population = stacked_data |>
+      ungroup() |>
+      transmute(
+        population = ifelse(pop == "1", 1, 0)
+      )|>
+      pull(population)
 
-  ees = cbind(
-    iptw=ee_iptw,
-    iptw_num=ee_iptw_numerator,
-    iosw_w=ee_iosw_w,
-    iosw_aw=ee_iosw_aw,
-    y0=ee_y0,
-    y=ee_y,
-    paf=ee_paf
-  )
+    iosw.w = stacked_data |>
+      model.matrix(object = ~age * aa_indicator)
 
-  if(solve) {
-    return(colSums(ees))
-  } else {
-    return(ees)
+    iosw.aw = stacked_data |>
+      model.matrix(object = ~age * aa_indicator * idu)
+
+    iptw.lc = with(stacked_data, plogis(theta[1] + theta[2] * aa_indicator + cd4knots %*% theta[3:6] + ageknots %*% theta[7:10]))
+
+    iptw.weights = with(stacked_data, (1-idu) * theta[11] / (1-iptw.lc))
+
+    iosw.w.weights = plogis(iosw.w %*% theta[12:21])
+    iosw.aw.weights = plogis(iosw.aw %*% theta[22:41])
+
+    iosw.w.odds = exp(iosw.w %*% theta[12:21])
+    iosw.aw.odds = exp(iosw.aw %*% theta[22:41])
+
+    ee_eval = stacked_data |>
+      ungroup() |>
+      mutate(
+        across(c(ageknots, cd4knots), ~replace_na(.x, 0))
+      ) |>
+      transmute(
+        theta1 = (population == 0) * (idu - iptw.lc),
+        theta2 = (population == 0) * (idu - iptw.lc) * aa_indicator,
+        theta3 = (population == 0) * (idu - iptw.lc) * cd4knots[,1],
+        theta4 = (population == 0) * (idu - iptw.lc) * cd4knots[,2],
+        theta5 = (population == 0) * (idu - iptw.lc) * cd4knots[,3],
+        theta6 = (population == 0) * (idu - iptw.lc) * cd4knots[,4],
+        theta7 = (population == 0) * (idu - iptw.lc) * ageknots[,1],
+        theta8 = (population == 0) * (idu - iptw.lc) * ageknots[,2],
+        theta9 = (population == 0) * (idu - iptw.lc) * ageknots[,3],
+        theta10 = (population == 0) * (idu - iptw.lc) * ageknots[,4],
+
+        theta11 = (population == 0) * (idu - theta[11]),
+        theta12 = (population - iosw.w.weights),
+        theta13 = (population - iosw.w.weights) * (age=="25-34"),
+        theta14 = (population - iosw.w.weights) * (age=="35-44"),
+        theta15 = (population - iosw.w.weights) * (age=="45-54"),
+        theta16 = (population - iosw.w.weights) * (age=="55+"),
+        theta17 = (population - iosw.w.weights) * aa_indicator,
+        theta18 = (population - iosw.w.weights) * (age=="25-34") * aa_indicator,
+        theta19 = (population - iosw.w.weights) * (age=="35-44") * aa_indicator,
+        theta20 = (population - iosw.w.weights) * (age=="45-54") * aa_indicator,
+        theta21 = (population - iosw.w.weights) * (age=="55+") * aa_indicator,
+
+        theta22 = (population - iosw.aw.weights),
+        theta23 = (population - iosw.aw.weights) * (age=="25-34"),
+        theta24 = (population - iosw.aw.weights) * (age=="35-44"),
+        theta25 = (population - iosw.aw.weights) * (age=="45-54"),
+        theta26 = (population - iosw.aw.weights) * (age=="55+"),
+        theta27 = (population - iosw.aw.weights) * aa_indicator,
+        theta28 = (population - iosw.aw.weights) * idu,
+        theta29 = (population - iosw.aw.weights) * (age=="25-34") * aa_indicator,
+        theta30 = (population - iosw.aw.weights) * (age=="35-44") * aa_indicator,
+        theta31 = (population - iosw.aw.weights) * (age=="45-54") * aa_indicator,
+        theta32 = (population - iosw.aw.weights) * (age=="55+") * aa_indicator,
+        theta33 = (population - iosw.aw.weights) * (age=="25-34") * idu,
+        theta34 = (population - iosw.aw.weights) * (age=="35-44") * idu,
+        theta35 = (population - iosw.aw.weights) * (age=="45-54") * idu,
+        theta36 = (population - iosw.aw.weights) * (age=="55+") * idu,
+        theta37 = (population - iosw.aw.weights) * aa_indicator * idu,
+        theta38 = (population - iosw.aw.weights) * (age=="25-34") * aa_indicator * idu,
+        theta39 = (population - iosw.aw.weights) * (age=="35-44") * aa_indicator * idu,
+        theta40 = (population - iosw.aw.weights) * (age=="45-54") * aa_indicator * idu,
+        theta41 = (population - iosw.aw.weights) * (age=="55+") * aa_indicator * idu,
+        theta42 = (population == 0) * (d10 - theta[42])  * iptw.weights * iosw.w.odds,
+        theta43 = (population == 0) * (d10 - theta[43]) * iosw.aw.odds,
+        theta44 = theta[42] - theta[43] * (1 - theta[44])
+      )
+
+    if(solve){
+      return(ee_eval |> colSums(na.rm=T))
+    } else {
+      return(ee_eval |> (\(.) {replace(., is.na(.), 0)})() |> as.matrix())
+    }
   }
 }
 
@@ -427,183 +437,209 @@ paf_mestimation_naive = function(theta,
 }
 
 
-vec_start = jitter(rep(0, times=44))
-vec_start_naive = jitter(rep(0, times=14))
-mr = multiroot(paf_mestimation,
-               vec_start,
-               target_pop = cdc_2021,
-               study_pop = wihs,
-               solve = T)
+theta1..10 = glm(idu ~ aa_indicator + cd4knots + ageknots, data=wihs,family = binomial()) |> coef()
+theta11 = 0.4
+theta12..21 = glm(population ~ age * aa_indicator, data=stacked_data) |> coef()
+theta22..41 = glm(population ~ age * aa_indicator * idu, data=stacked_data) |> coef()
+theta42 = 0.2
+theta43 = 0.24
+theta44 = 0.14
 
-mr.subset = multiroot(paf_mestimation,
-                      vec_start,
-                      target_pop = cdc_2021,
-                      study_pop = wihs_subset,
-                      solve = T)
+vec_start = c(theta1..10, theta11, theta12..21, theta22..41, theta42, theta43, theta44) |> unname()
 
-mr.naive = multiroot(paf_mestimation_naive,
-                     vec_start_naive,
-                     study_pop = wihs,
-                     solve=T)
 
-mr.naive2 = multiroot(paf_mestimation,
-                      vec_start,
-                      target_pop = wihs |> group_by(age, idu, aa_indicator) |> count(name="cases"),
-                      study_pop = wihs,
-                      solve = T)
+mr = multiroot(paf_mestimation(make_stacked_data(cdc_2008, wihs), solve=T),
+              vec_start)
 
-mr.200 = multiroot(paf_mestimation,
-               vec_start,
-               target_pop = cdc_sample_200,
-               study_pop = wihs,
-               solve = T)
 
-mr.500 = multiroot(paf_mestimation,
-                   vec_start,
-                   target_pop = cdc_sample_500,
-                   study_pop = wihs,
-                   solve = T)
+## 8a. Test against other ----
 
-mr.1000 = multiroot(paf_mestimation,
-                   vec_start,
-                   target_pop = cdc_sample_1000,
-                   study_pop = wihs,
-                   solve = T)
+#
+{
+mr.subset = multiroot(paf_mestimation(make_stacked_data(cdc_2008, wihs_subset), solve=T), vec_start)
 
-mr.5000 = multiroot(paf_mestimation,
-                   vec_start,
-                   target_pop = cdc_sample_5000,
-                   study_pop = wihs,
-                   solve = T)
+mr.200 = multiroot(paf_mestimation(make_stacked_data(cdc_sample_200, wihs), solve=T), vec_start)
 
+mr.500 =multiroot(paf_mestimation(make_stacked_data(cdc_sample_500, wihs), solve=T), vec_start)
+
+mr.1000 = multiroot(paf_mestimation(make_stacked_data(cdc_sample_1000, wihs), solve=T), vec_start)
+
+mr.5000 = multiroot(paf_mestimation(make_stacked_data(cdc_sample_5000, wihs), solve=T), vec_start)
+}
 
 
 # 9. M-Estimation - variance ----
-paf_sandwich_variance = function(f, xval, ...){
-  a0 = -1 * jacobian(func=f, x=xval, method="simple")
-  evaluated = f(xval, ...)
-  b0 = t(evaluated) %*% evaluated
+paf_sandwich_variance = function(f, data, xval){
+  n = nrow(data)
+  ee_fun = f(stacked_data = data, solve=T)
 
-  v0 = solve(a0) %*% b0 %*% t(solve(a0))
+  a0 = - gradient(f=ee_fun, x=xval) / n
+  evaluated = f(stacked_data=data, solve=F)(xval)
+  b0 = t(evaluated) %*% evaluated / n
+
+  v0 = solve(a0) %*% b0 %*% t(solve(a0)) / n
   return(v0)
 }
 
-paf.vcov = paf_sandwich_variance(paf_mestimation,
-                      mr$root,
-                      target_pop = cdc_2021,
-                      study_pop = wihs,
-                      solve=F)
+paf_sandwich_variance(paf_mestimation, stacked_data, mr$root) |> diag() |> sqrt()
 
-paf.vcov.subset = paf_sandwich_variance(paf_mestimation,
-                                        mr.subset$root,
-                                        target_pop = cdc_2021,
-                                        study_pop = wihs_subset,
-                                        solve=F)
-
-paf.vcov.200 = paf_sandwich_variance(paf_mestimation,
-                                     mr.200$root,
-                                     target_pop = cdc_sample_200,
-                                     study_pop = wihs,
-                                     solve=F)
-paf.vcov.500 = paf_sandwich_variance(paf_mestimation,
-                                     mr.500$root,
-                                     target_pop = cdc_sample_500,
-                                     study_pop = wihs,
-                                     solve=F)
-paf.vcov.1000 = paf_sandwich_variance(paf_mestimation,
-                                     mr.1000$root,
-                                     target_pop = cdc_sample_1000,
-                                     study_pop = wihs,
-                                     solve=F)
-paf.vcov.5000 = paf_sandwich_variance(paf_mestimation,
-                                     mr.5000$root,
-                                     target_pop = cdc_sample_5000,
-                                     study_pop = wihs,
-                                     solve=F)
-# Note - no difference between estimating naive population with both IOSW models.
-paf.vcov.naive = paf_sandwich_variance(paf_mestimation_naive,
-                                       mr.naive$root,
-                                       study_pop = wihs,
-                                       solve = F)
-paf.vcov.naive2 = paf_sandwich_variance(paf_mestimation,
-                                        mr.subset$root,
-                                        target_pop = wihs |> group_by(age, idu, aa_indicator) |> count(name="cases"),
-                                        study_pop = wihs,
-                                        solve=F)
 
 get_paf_variance = function(variance_matrix, rf, rootnum=44){
   paf_mest = rf$root[rootnum]
   paf_mest.variance = diag(variance_matrix)[rootnum]
   paf_mest.cis = paf_mest + c(-1.96, 1.96) * sqrt(paf_mest.variance)
 
-  return(c(se=paf_mest.variance |> sqrt(), cis=paf_mest.cis))
+  return(c(paf=rf$root[rootnum], se=paf_mest.variance |> sqrt(), cis=paf_mest.cis))
 }
+
+
+get_paf_variance(
+  paf_sandwich_variance(paf_mestimation,
+                        make_stacked_data(cdc_2008, wihs),
+                        mr$root),
+  rf=mr
+)
+
+targets = read_csv(file.choose())
+
+### 1996 ----
+stacked_1996 = make_stacked_data(
+  target=targets |> mutate(cases = cases1996),
+  study=wihs
+)
+
+mr_1996 = multiroot(paf_mestimation(stacked_1996), vec_start)
+
+get_paf_variance(
+  paf_sandwich_variance(paf_mestimation,
+                        stacked_1996, mr_1996$root),
+  rf=mr_1996
+)
+
+### 2006 ----
+stacked_2006 = make_stacked_data(
+  target=targets |> mutate(cases = cases2006),
+  study=wihs
+)
+
+mr_2006 = multiroot(paf_mestimation(stacked_2006), vec_start)
+
+get_paf_variance(
+  paf_sandwich_variance(paf_mestimation,
+                        stacked_2006, mr_2006$root),
+  rf=mr_2006
+)
+
+### 2021 ----
+stacked_2021 = make_stacked_data(
+  target=targets |> mutate(cases = cases2021),
+  study=wihs
+)
+
+mr_2021 = multiroot(paf_mestimation(make_stacked_data(cdc_2021, wihs)), vec_start)
+
+get_paf_variance(
+  paf_sandwich_variance(paf_mestimation,
+                        stacked_data, mr_2021$root),
+  rf=mr_2021
+)
+
+### 2008 - HIV Incident population ----
+stacked_2008 = make_stacked_data(
+  target = target_2008 |>
+    select(age, idu, aa_indicator, cases) |>
+    drop_na(),
+  study=wihs
+)
+
+mr_2008 = multiroot(paf_mestimation(stacked_2008), vec_start)
+
+get_paf_variance(
+  paf_sandwich_variance(paf_mestimation,
+                        stacked_2008, mr_2008$root),
+  rf=mr_2008,
+  rootnum=42
+)
+
+### WIHS ----
+stacked_wihs = make_stacked_data(
+  target=targets |> mutate(cases = n_wihs),
+  study=wihs
+)
+
+mr_wihs = multiroot(paf_mestimation(stacked_wihs), vec_start)
+
+get_paf_variance(
+  paf_sandwich_variance(paf_mestimation,
+                        stacked_wihs, mr_wihs$root),
+  rf=mr_wihs,
+  rootnum=42
+)
+
 
 # 10. Results ----
 paf = c(
   paf = mr$root[44],
-  paf.cis = get_paf_variance(paf.vcov,
-                             mr),
+  paf.cis = get_paf_variance(
+    paf_sandwich_variance(paf_mestimation,
+                          make_stacked_data(cdc_2008, wihs),
+                          mr$root),
+    rf=mr
+  ),
   paf.bootstrap.cis = bootstrap_cis(mr$root[44], bs.se),
   paf.bootstrap.quantile = quantile_cis(bootstrap)
 )
 
-paf.subset = c(
-  paf = mr.subset$root[44],
-  paf.cis = get_paf_variance(paf.vcov.subset,
-                             mr.subset),
-  paf.bootstrap.cis = bootstrap_cis(mr.subset$root[44], bs.se.subset),
-  paf.bootstrap.quantile = quantile_cis(bootstrap.subset)
-)
-
-paf.naive = c(
-  paf = mr.naive$root[14],
-  paf.cis = get_paf_variance(paf.vcov.naive,
-                             mr.naive, rootnum = 14),
-  paf.bootstrap.cis = bootstrap_cis(mr.naive$root[14], bs.se.naive),
-  paf.bootstrap.quantile = quantile_cis(bootstrap, var="naive.paf")
-)
 
 # Subset results
 {
   paf.200 = c(
     paf = mr.200$root[44],
-    paf.cis = get_paf_variance(paf.vcov.200, mr.200),
+    paf.cis = get_paf_variance(
+      paf_sandwich_variance(paf_mestimation,
+                            make_stacked_data(cdc_sample_200, wihs),
+                            mr.200$root),
+      rf=mr.200
+    ),
     paf.bootstrap.cis = bootstrap_cis(mr.200$root[44], bs.se.200),
     paf.bootstrap.quantile = quantile_cis(bootstrap.200)
   )
 
   paf.500 = c(
     paf = mr.500$root[44],
-    paf.cis = get_paf_variance(paf.vcov.500, mr.500),
+    paf.cis = get_paf_variance(
+      paf_sandwich_variance(paf_mestimation,
+                            make_stacked_data(cdc_sample_500, wihs),
+                            mr.500$root),
+      rf=mr.500
+    ),
     paf.bootstrap.cis = bootstrap_cis(mr.500$root[44], bs.se.500),
     paf.bootstrap.quantile = quantile_cis(bootstrap.500)
   )
 
   paf.1000 = c(
     paf = mr.1000$root[44],
-    paf.cis = get_paf_variance(paf.vcov.1000, mr.1000),
+    paf.cis = get_paf_variance(
+      paf_sandwich_variance(paf_mestimation,
+                            make_stacked_data(cdc_sample_1000, wihs),
+                            mr.1000$root),
+      rf=mr.1000
+    ),
     paf.bootstrap.cis = bootstrap_cis(mr.1000$root[44], bs.se.1000),
     paf.bootstrap.quantile = quantile_cis(bootstrap.1000)
   )
 
   paf.5000 = c(
     paf = mr.5000$root[44],
-    paf.cis = get_paf_variance(paf.vcov.5000, mr.5000),
+    paf.cis = get_paf_variance(
+      paf_sandwich_variance(paf_mestimation,
+                            make_stacked_data(cdc_sample_5000, wihs),
+                            mr.5000$root),
+      rf=mr.5000
+    ),
     paf.bootstrap.cis = bootstrap_cis(mr.5000$root[44], bs.se.5000),
     paf.bootstrap.quantile = quantile_cis(bootstrap.5000)
   )
 }
 
-# 11. Additional Deatils ----
-# 10 year risk of AIDS/death in WIHS cohort
-wihs.risk = c(
-  naive.risk = mr.naive$root[43],
-  naive.cis = get_paf_variance(paf.vcov.naive, mr.naive, rootnum = 43),
-  y.risk = mr$root[43],
-  y.cis = get_paf_variance(paf.vcov, mr, rootnum = 43),
-  y0.risk = mr$root[42],
-  y0.cis = get_paf_variance(paf.vcov, mr, rootnum = 42)
-)
-
-wihs.risk
+bind_rows(paf, paf.5000, paf.1000, paf.500, paf.200) |> view()
